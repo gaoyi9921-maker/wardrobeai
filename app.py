@@ -4,6 +4,9 @@ import hashlib
 import requests
 from PIL import Image
 from urllib.parse import urlencode
+import base64
+import io
+import json
 
 # ------------------- Page Config -------------------
 st.set_page_config(page_title="WardrobeAI - 衣橱穿搭助手", page_icon="👔", layout="wide")
@@ -38,7 +41,7 @@ T = {
     "中文": {
         "title": "👔 WardrobeAI — 你的 AI 衣橱与穿搭助手",
         "privacy_title": "🔐 隐私说明",
-        "privacy_body": "- 本演示将衣物暂存于服务器内存的当前会话中\n- 刷新页面可能会清空数据\n- 不会读取聊天/联系人信息",
+        "privacy_body": "- 本演示将衣物暂存于服务器内存的当前会话中\n- 刷新页面可能会清空数据\n- 不会读取聊天/联系人信息\n- 若开启 OpenAI 分析：会把你上传的衣物照片发送给 OpenAI 做识别（仅用于生成建议）",
         "profile": "👤 你的信息",
         "iam": "我属于",
         "style": "风格偏好",
@@ -57,10 +60,17 @@ T = {
         "wardrobe": "🧺 我的衣橱",
         "empty": "你的衣橱还是空的，先添加几件吧！",
         "check": "🧠 衣橱体检",
-        "analyze": "🔍 分析我的衣橱",
+        "analyze": "🔍 分析我的衣橱（规则版）",
         "keep": "✅ 保留",
         "improve": "⚠️ 建议优化",
         "remove": "🗑 建议清理",
+        "ai_title": "🧠 AI 衣物分析（OpenAI）",
+        "ai_tip": "上传衣物照片后点击按钮，自动识别并给出搭配/保留建议。",
+        "ai_need_key": "⚠️ 你还没在 Streamlit Secrets 里配置 OPENAI_API_KEY。",
+        "ai_need_item": "⚠️ 请先上传并保存至少 1 件衣物，然后再做 AI 分析。",
+        "ai_btn": "✨ 用 OpenAI 分析我的衣物",
+        "ai_running": "正在分析中…",
+        "ai_fail": "❌ OpenAI 分析失败（可能是 Key/模型/网络问题）。",
         "outfit": "📅 今日穿搭（优先使用你的衣橱）",
         "temp": "温度 (°C)",
         "weather": "天气",
@@ -82,12 +92,12 @@ T = {
         "no_pdd": "拼多多暂无结果（检查密钥/签名/权限）",
         "no_tb": "淘宝暂无结果（检查密钥/签名/权限）",
         "no_jd": "京东暂无结果（检查密钥/签名/权限）",
-        "footer": "© WardrobeAI · 测试部署版 · 衣橱 · 穿搭 · 推荐",
+        "footer": "© WardrobeAI · 轻量版 + OpenAI 衣物分析 · 衣橱 · 穿搭 · 推荐",
     },
     "English": {
         "title": "👔 WardrobeAI — Your AI Personal Wardrobe & Outfit Assistant",
         "privacy_title": "🔐 PRIVACY NOTE",
-        "privacy_body": "- This demo stores items in the current server session memory\n- Refreshing may clear data\n- No chat or contact access",
+        "privacy_body": "- This demo stores items in the current server session memory\n- Refreshing may clear data\n- No chat/contact access\n- If OpenAI analysis is enabled: your uploaded clothing images will be sent to OpenAI for suggestions.",
         "profile": "👤 Your Profile",
         "iam": "I am",
         "style": "Style",
@@ -106,10 +116,17 @@ T = {
         "wardrobe": "🧺 My Wardrobe",
         "empty": "Your wardrobe is empty. Start adding items!",
         "check": "🧠 Wardrobe Health Check",
-        "analyze": "🔍 Analyze My Wardrobe",
+        "analyze": "🔍 Analyze My Wardrobe (rules)",
         "keep": "✅ Keep",
         "improve": "⚠️ Improve",
         "remove": "🗑 Remove",
+        "ai_title": "🧠 AI Clothing Analysis (OpenAI)",
+        "ai_tip": "Upload clothing photos and click the button for suggestions.",
+        "ai_need_key": "⚠️ OPENAI_API_KEY is not set in Streamlit Secrets.",
+        "ai_need_item": "⚠️ Please add at least 1 item first.",
+        "ai_btn": "✨ Analyze my items with OpenAI",
+        "ai_running": "Analyzing…",
+        "ai_fail": "❌ OpenAI request failed (key/model/network).",
         "outfit": "📅 Today's Outfit — From YOUR wardrobe",
         "temp": "Temperature (°C)",
         "weather": "Weather",
@@ -131,10 +148,113 @@ T = {
         "no_pdd": "No PDD result (check keys/signature).",
         "no_tb": "No Taobao result (check keys/signature).",
         "no_jd": "No JD result (check keys/signature).",
-        "footer": "© WardrobeAI · Test Deployment Version · Wardrobe · Outfit · Recommendation",
+        "footer": "© WardrobeAI · Lite + OpenAI clothing analysis",
     }
 }[lang]
 
+# ==================== OpenAI helpers ====================
+def get_openai_key_and_model():
+    api_key = None
+    model = "gpt-4o-mini"
+    try:
+        api_key = st.secrets.get("OPENAI_API_KEY", None)
+        model = st.secrets.get("OPENAI_MODEL", model)
+    except Exception:
+        # local run without secrets
+        api_key = None
+    return api_key, model
+
+def pil_to_base64_jpeg(img: Image.Image, max_side=768, quality=85) -> str:
+    # resize to control cost
+    w, h = img.size
+    scale = min(max_side / max(w, h), 1.0)
+    if scale < 1.0:
+        img = img.resize((int(w * scale), int(h * scale)))
+    buff = io.BytesIO()
+    img.convert("RGB").save(buff, format="JPEG", quality=quality)
+    return base64.b64encode(buff.getvalue()).decode("utf-8")
+
+def openai_analyze_items(images, meta_list, user_profile_text):
+    """
+    images: list[PIL.Image]
+    meta_list: list[dict] same length, contains name/type/color
+    """
+    api_key, model = get_openai_key_and_model()
+    if not api_key:
+        return None, "NO_KEY"
+
+    # Build vision inputs (OpenAI Responses API style)
+    # We keep it resilient: if model doesn't support vision, it will error; we catch upstream.
+    content = []
+    # instruction block
+    content.append({
+        "type": "text",
+        "text": (
+            "你是专业穿搭顾问。请基于用户衣物照片与填写信息，输出一个 JSON，字段如下：\n"
+            "items: [{name, predicted_type, predicted_color, style_tags(数组), season(数组), occasions(数组), keep_decision(keep/improve/remove), reason}]\n"
+            "wardrobe_advice: 3-6条整体建议（中文）\n"
+            "notes: 若图片不清晰请说明。\n"
+            "要求：只输出 JSON，不要输出多余文本。"
+        )
+    })
+    # user profile
+    content.append({
+        "type": "text",
+        "text": f"用户资料：{user_profile_text}"
+    })
+
+    for idx, (img, meta) in enumerate(zip(images, meta_list), start=1):
+        b64 = pil_to_base64_jpeg(img)
+        content.append({
+            "type": "text",
+            "text": f"衣物{idx}填写信息：{json.dumps(meta, ensure_ascii=False)}"
+        })
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
+        })
+
+    payload = {
+        "model": model,
+        "input": [
+            {
+                "role": "user",
+                "content": content
+            }
+        ],
+        "max_output_tokens": 800
+    }
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+
+    # Try Responses API first
+    try:
+        r = requests.post("https://api.openai.com/v1/responses", headers=headers, json=payload, timeout=60)
+        if r.status_code >= 400:
+            return None, f"HTTP_{r.status_code}: {r.text[:200]}"
+        data = r.json()
+        # Extract text output
+        # Responses API returns "output" array; we try common paths
+        text = None
+        for out in data.get("output", []):
+            for c in out.get("content", []):
+                if c.get("type") in ("output_text", "text"):
+                    text = c.get("text")
+                    if text:
+                        break
+            if text:
+                break
+        if not text:
+            # fallback: sometimes it is at data["output_text"]
+            text = data.get("output_text")
+        return text, None
+    except Exception as e:
+        return None, str(e)
+
+# ------------------- Title -------------------
 st.title(T["title"])
 
 # ==================== 联盟配置（试跑阶段不启用：先保持空） ====================
@@ -147,7 +267,7 @@ PDD_CLIENT_ID = ""
 PDD_CLIENT_SECRET = ""
 PDD_PID = ""
 
-# ==================== 三平台商品搜索函数（只有在开启开关且密钥齐全才调用） ====================
+# ==================== 三平台商品搜索函数（保持原样，不影响 OpenAI 分析） ====================
 def taobao_search(keyword="女装", price_min=150, price_max=300):
     try:
         if not (TAOBAO_APP_KEY and TAOBAO_APP_SECRET and TAOBAO_ADZONE_ID):
@@ -191,8 +311,8 @@ def jd_search(keyword="女装", price_min=300):
         res = requests.get("https://api.jd.com/routerjson?" + urlencode(params), timeout=5).json()
         block = res.get("jd_union_open_goods_query_response", {}).get("result", {})
         if isinstance(block, str):
-            import json
-            block = json.loads(block)
+            import json as _json
+            block = _json.loads(block)
         return (block or {}).get("data", [])
     except Exception:
         return []
@@ -242,7 +362,9 @@ with col2:
 with col3:
     body_shape = st.selectbox(T["shape"], OPTIONS["body_shape"])
 
-# ==================== 添加衣物（加入按钮：点了才保存） ====================
+user_profile_text = f"user_type={user_type}, fashion_style={fashion_style}, body_shape={body_shape}"
+
+# ==================== 添加衣物（点按钮才保存） ====================
 st.subheader(T["add"])
 ca1, ca2 = st.columns(2)
 with ca1:
@@ -260,7 +382,7 @@ if save_clicked:
     elif uploaded is None:
         st.warning(T["need_photo"])
     else:
-        img = Image.open(uploaded).convert("RGB").resize((300, 300))
+        img = Image.open(uploaded).convert("RGB").resize((600, 600))
         add_cloth(img, cloth_name.strip(), cloth_type, cloth_color.strip())
         st.success(T["added"])
 
@@ -277,15 +399,68 @@ if wardrobe:
 else:
     st.info(T["empty"])
 
-# ==================== 衣橱诊断 ====================
+# ==================== 衣橱诊断（规则版：占位） ====================
 st.subheader(T["check"])
 if st.button(T["analyze"]):
     total = len(wardrobe)
     st.success(f"{T['keep']}: {max(0, total-3)}")
     st.warning(f"{T['improve']}: 1")
     st.error(f"{T['remove']}: 2")
+    st.caption("（这是规则占位输出，下一步可替换为真实规则/AI。）")
 
-# ==================== 穿搭生成 ====================
+# ==================== OpenAI 衣物分析 ====================
+st.subheader(T["ai_title"])
+st.caption(T["ai_tip"])
+
+api_key, model_name = get_openai_key_and_model()
+if not api_key:
+    st.warning(T["ai_need_key"])
+else:
+    st.caption(f"当前模型：{model_name}")
+
+ai_btn = st.button(T["ai_btn"], type="primary")
+
+if ai_btn:
+    if not api_key:
+        st.warning(T["ai_need_key"])
+    elif len(wardrobe) < 1:
+        st.warning(T["ai_need_item"])
+    else:
+        with st.spinner(T["ai_running"]):
+            images = [w["img"] for w in wardrobe[:6]]  # 最多取前6件，防止太贵
+            metas = [{"name": w["name"], "type": w["type"], "color": w["color"]} for w in wardrobe[:6]]
+            text, err = openai_analyze_items(images, metas, user_profile_text)
+        if err:
+            st.error(T["ai_fail"])
+            st.code(str(err))
+        else:
+            # 尝试把输出解析成 JSON 并展示
+            try:
+                data = json.loads(text)
+                st.success("✅ 分析完成")
+                st.markdown("### 单品建议")
+                for it in data.get("items", []):
+                    with st.expander(f"{it.get('name','未命名')} · {it.get('keep_decision','')}", expanded=True):
+                        st.write({
+                            "predicted_type": it.get("predicted_type"),
+                            "predicted_color": it.get("predicted_color"),
+                            "style_tags": it.get("style_tags"),
+                            "season": it.get("season"),
+                            "occasions": it.get("occasions"),
+                            "keep_decision": it.get("keep_decision"),
+                            "reason": it.get("reason"),
+                        })
+                st.markdown("### 衣橱整体建议")
+                for s in data.get("wardrobe_advice", []):
+                    st.write(f"- {s}")
+                if data.get("notes"):
+                    st.info(f"备注：{data.get('notes')}")
+            except Exception:
+                # 如果模型没严格输出 JSON，就直接原文展示
+                st.warning("模型输出不是标准 JSON，我先原样展示（我也可以把提示词调得更严）。")
+                st.text(text)
+
+# ==================== 穿搭生成（保留原占位逻辑） ====================
 st.subheader(T["outfit"])
 cb1, cb2 = st.columns(2)
 with cb1:
@@ -317,7 +492,6 @@ if gen or regenerate:
         st.success(T["outfit_title"])
         st.write(f"🌡 {weather} | {temp}°C | 📅 {occasion}")
 
-        # 这里后续我们可以改成真正从衣橱里挑选上装/下装/鞋子
         st.markdown("### 👕 Top: Simple Top")
         st.markdown("### 👖 Bottom: Jeans / Casual Pants")
         st.markdown("### 👞 Shoes: Sneakers")
