@@ -50,6 +50,9 @@ T = {
         "color": "颜色",
         "color_ph": "黑、白、蓝…",
         "upload": "上传照片",
+        "save_btn": "✅ 上传并保存到衣橱",
+        "need_name": "⚠️ 请先填写衣物名称",
+        "need_photo": "⚠️ 请先选择一张照片",
         "added": "✅ 已加入衣橱",
         "wardrobe": "🧺 我的衣橱",
         "empty": "你的衣橱还是空的，先添加几件吧！",
@@ -96,6 +99,9 @@ T = {
         "color": "Color",
         "color_ph": "Black, White, Blue…",
         "upload": "Upload photo",
+        "save_btn": "✅ Upload & Save to Wardrobe",
+        "need_name": "⚠️ Please enter item name first.",
+        "need_photo": "⚠️ Please choose a photo first.",
         "added": "✅ Added to your Wardrobe",
         "wardrobe": "🧺 My Wardrobe",
         "empty": "Your wardrobe is empty. Start adding items!",
@@ -135,10 +141,8 @@ st.title(T["title"])
 TAOBAO_APP_KEY = ""
 TAOBAO_APP_SECRET = ""
 TAOBAO_ADZONE_ID = ""
-
 JD_APP_KEY = ""
 JD_APP_SECRET = ""
-
 PDD_CLIENT_ID = ""
 PDD_CLIENT_SECRET = ""
 PDD_PID = ""
@@ -185,7 +189,6 @@ def jd_search(keyword="女装", price_min=300):
         s = JD_APP_SECRET + "".join(f"{k}{v}" for k, v in sorted(params.items())) + JD_APP_SECRET
         params["sign"] = hashlib.md5(s.encode()).hexdigest().upper()
         res = requests.get("https://api.jd.com/routerjson?" + urlencode(params), timeout=5).json()
-
         block = res.get("jd_union_open_goods_query_response", {}).get("result", {})
         if isinstance(block, str):
             import json
@@ -239,7 +242,7 @@ with col2:
 with col3:
     body_shape = st.selectbox(T["shape"], OPTIONS["body_shape"])
 
-# ==================== 添加衣物 ====================
+# ==================== 添加衣物（加入按钮：点了才保存） ====================
 st.subheader(T["add"])
 ca1, ca2 = st.columns(2)
 with ca1:
@@ -249,10 +252,17 @@ with ca2:
 cloth_color = st.text_input(T["color"], placeholder=T["color_ph"])
 uploaded = st.file_uploader(T["upload"], type=["jpg", "png", "jpeg"])
 
-if uploaded and cloth_name:
-    img = Image.open(uploaded).convert("RGB").resize((300, 300))
-    add_cloth(img, cloth_name, cloth_type, cloth_color)
-    st.success(T["added"])
+save_clicked = st.button(T["save_btn"])
+
+if save_clicked:
+    if not cloth_name.strip():
+        st.warning(T["need_name"])
+    elif uploaded is None:
+        st.warning(T["need_photo"])
+    else:
+        img = Image.open(uploaded).convert("RGB").resize((300, 300))
+        add_cloth(img, cloth_name.strip(), cloth_type, cloth_color.strip())
+        st.success(T["added"])
 
 # ==================== 我的衣橱 ====================
 st.subheader(T["wardrobe"])
@@ -264,7 +274,6 @@ if wardrobe:
             st.image(item["img"], use_container_width=True)
             st.markdown(f"**{item['name']}**")
             st.caption(f"{item['type']} | {item['color']}")
-            st.success("✅")
 else:
     st.info(T["empty"])
 
@@ -307,6 +316,8 @@ if gen or regenerate:
     else:
         st.success(T["outfit_title"])
         st.write(f"🌡 {weather} | {temp}°C | 📅 {occasion}")
+
+        # 这里后续我们可以改成真正从衣橱里挑选上装/下装/鞋子
         st.markdown("### 👕 Top: Simple Top")
         st.markdown("### 👖 Bottom: Jeans / Casual Pants")
         st.markdown("### 👞 Shoes: Sneakers")
