@@ -11,6 +11,29 @@ st.set_page_config(page_title="WardrobeAI - 衣橱穿搭助手", page_icon="👔
 # ==================== 语言选择 ====================
 lang = st.sidebar.selectbox("语言 / Language", ["中文", "English"], index=0)
 
+# ==================== 选项（中英文两套） ====================
+OPTIONS = {
+    "中文": {
+        "user_type": ["通用", "潮男", "潮女", "绅士", "淑女", "宝宝", "妈妈", "孕期"],
+        "fashion_style": ["经典", "极简轻奢", "街头", "复古", "小众独特", "洛丽塔", "国风", "休闲", "酷感"],
+        "body_shape": ["标准", "偏瘦", "匀称", "高挑", "娇小"],
+        "category": ["上装", "下装", "外套", "鞋子", "配饰"],
+        "weather": ["晴天", "多云", "阴天", "下雨", "大风", "下雪"],
+        "occasion": ["上班", "会议", "约会", "日常", "运动", "面试"],
+        "fitness": ["低", "中", "高"],
+    },
+    "English": {
+        "user_type": ["General", "Trendy Man", "Trendy Woman", "Gentleman", "Lady", "Baby", "Mom", "Pregnancy"],
+        "fashion_style": ["Classic", "Minimal Luxury", "Street", "Vintage", "Unique", "Lolita", "Chinese Style", "Casual", "Cool"],
+        "body_shape": ["Standard", "Slim", "Medium", "Tall", "Petite"],
+        "category": ["Top", "Bottom", "Outerwear", "Shoes", "Accessory"],
+        "weather": ["Sunny", "Cloudy", "Overcast", "Rain", "Wind", "Snow"],
+        "occasion": ["Work", "Meeting", "Date", "Casual", "Sports", "Interview"],
+        "fitness": ["Low", "Medium", "High"],
+    }
+}[lang]
+
+# ==================== 文案 ====================
 T = {
     "中文": {
         "title": "👔 WardrobeAI — 你的 AI 衣橱与穿搭助手",
@@ -210,11 +233,11 @@ st.info(f"**{T['privacy_title']}**\n\n{T['privacy_body']}")
 st.subheader(T["profile"])
 col1, col2, col3 = st.columns(3)
 with col1:
-    user_type = st.selectbox(T["iam"], ["General", "Trendy Man", "Trendy Woman", "Gentleman", "Lady", "Baby", "Mom", "Pregnancy"])
+    user_type = st.selectbox(T["iam"], OPTIONS["user_type"])
 with col2:
-    fashion_style = st.selectbox(T["style"], ["Classic", "Minimal Luxury", "Street", "Vintage", "Unique", "Lolita", "Chinese Style", "Casual", "Cool"])
+    fashion_style = st.selectbox(T["style"], OPTIONS["fashion_style"])
 with col3:
-    body_shape = st.selectbox(T["shape"], ["Standard", "Slim", "Medium", "Tall", "Petite"])
+    body_shape = st.selectbox(T["shape"], OPTIONS["body_shape"])
 
 # ==================== 添加衣物 ====================
 st.subheader(T["add"])
@@ -222,7 +245,7 @@ ca1, ca2 = st.columns(2)
 with ca1:
     cloth_name = st.text_input(T["item_name"], placeholder=T["item_name_ph"])
 with ca2:
-    cloth_type = st.selectbox(T["category"], ["Top", "Bottom", "Outerwear", "Shoes", "Accessory"])
+    cloth_type = st.selectbox(T["category"], OPTIONS["category"])
 cloth_color = st.text_input(T["color"], placeholder=T["color_ph"])
 uploaded = st.file_uploader(T["upload"], type=["jpg", "png", "jpeg"])
 
@@ -258,10 +281,10 @@ st.subheader(T["outfit"])
 cb1, cb2 = st.columns(2)
 with cb1:
     temp = st.slider(T["temp"], -10, 40, 22)
-    weather = st.selectbox(T["weather"], ["Sunny", "Cloudy", "Overcast", "Rain", "Wind", "Snow"])
+    weather = st.selectbox(T["weather"], OPTIONS["weather"])
 with cb2:
-    occasion = st.selectbox(T["occasion"], ["Work", "Meeting", "Date", "Casual", "Sports", "Interview"])
-    fitness = st.selectbox(T["fitness"], ["Low", "Medium", "High"])
+    occasion = st.selectbox(T["occasion"], OPTIONS["occasion"])
+    fitness = st.selectbox(T["fitness"], OPTIONS["fitness"])
 
 cc1, cc2, cc3, cc4 = st.columns(4)
 with cc1:
