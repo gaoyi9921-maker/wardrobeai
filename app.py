@@ -70,7 +70,7 @@ T = {
         "ai_need_item": "⚠️ 请先上传并保存至少 1 件衣物，然后再做 AI 分析。",
         "ai_btn": "✨ 用 OpenAI 分析我的衣物",
         "ai_running": "正在分析中…",
-        "ai_fail": "❌ OpenAI 分析失败（可能是 Key/模型/网络问题）。",
+        "ai_fail": "❌ OpenAI 分析失败（一般是参数格式/模型不支持/Key 权限问题）。",
         "outfit": "📅 今日穿搭（优先使用你的衣橱）",
         "temp": "温度 (°C)",
         "weather": "天气",
@@ -126,7 +126,7 @@ T = {
         "ai_need_item": "⚠️ Please add at least 1 item first.",
         "ai_btn": "✨ Analyze my items with OpenAI",
         "ai_running": "Analyzing…",
-        "ai_fail": "❌ OpenAI request failed (key/model/network).",
+        "ai_fail": "❌ OpenAI request failed (format/model/key).",
         "outfit": "📅 Today's Outfit — From YOUR wardrobe",
         "temp": "Temperature (°C)",
         "weather": "Weather",
@@ -152,7 +152,7 @@ T = {
     }
 }[lang]
 
-# ==================== OpenAI helpers ====================
+# ==================== OpenAI helpers（已修复 content type） ====================
 def get_openai_key_and_model():
     api_key = None
     model = "gpt-4o-mini"
@@ -160,12 +160,10 @@ def get_openai_key_and_model():
         api_key = st.secrets.get("OPENAI_API_KEY", None)
         model = st.secrets.get("OPENAI_MODEL", model)
     except Exception:
-        # local run without secrets
         api_key = None
     return api_key, model
 
 def pil_to_base64_jpeg(img: Image.Image, max_side=768, quality=85) -> str:
-    # resize to control cost
     w, h = img.size
     scale = min(max_side / max(w, h), 1.0)
     if scale < 1.0:
@@ -174,21 +172,25 @@ def pil_to_base64_jpeg(img: Image.Image, max_side=768, quality=85) -> str:
     img.convert("RGB").save(buff, format="JPEG", quality=quality)
     return base64.b64encode(buff.getvalue()).decode("utf-8")
 
+def extract_output_text_from_responses(data: dict) -> str | None:
+    # responses output: output[] -> content[] -> output_text
+    for out in data.get("output", []):
+        for c in out.get("content", []):
+            if c.get("type") == "output_text" and c.get("text"):
+                return c["text"]
+    # fallback
+    if isinstance(data.get("output_text"), str):
+        return data["output_text"]
+    return None
+
 def openai_analyze_items(images, meta_list, user_profile_text):
-    """
-    images: list[PIL.Image]
-    meta_list: list[dict] same length, contains name/type/color
-    """
     api_key, model = get_openai_key_and_model()
     if not api_key:
         return None, "NO_KEY"
 
-    # Build vision inputs (OpenAI Responses API style)
-    # We keep it resilient: if model doesn't support vision, it will error; we catch upstream.
     content = []
-    # instruction block
     content.append({
-        "type": "text",
+        "type": "input_text",
         "text": (
             "你是专业穿搭顾问。请基于用户衣物照片与填写信息，输出一个 JSON，字段如下：\n"
             "items: [{name, predicted_type, predicted_color, style_tags(数组), season(数组), occasions(数组), keep_decision(keep/improve/remove), reason}]\n"
@@ -197,20 +199,19 @@ def openai_analyze_items(images, meta_list, user_profile_text):
             "要求：只输出 JSON，不要输出多余文本。"
         )
     })
-    # user profile
     content.append({
-        "type": "text",
+        "type": "input_text",
         "text": f"用户资料：{user_profile_text}"
     })
 
     for idx, (img, meta) in enumerate(zip(images, meta_list), start=1):
         b64 = pil_to_base64_jpeg(img)
         content.append({
-            "type": "text",
+            "type": "input_text",
             "text": f"衣物{idx}填写信息：{json.dumps(meta, ensure_ascii=False)}"
         })
         content.append({
-            "type": "image_url",
+            "type": "input_image",
             "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
         })
 
@@ -222,34 +223,22 @@ def openai_analyze_items(images, meta_list, user_profile_text):
                 "content": content
             }
         ],
-        "max_output_tokens": 800
+        "max_output_tokens": 900,
     }
 
     headers = {
         "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
-    # Try Responses API first
     try:
-        r = requests.post("https://api.openai.com/v1/responses", headers=headers, json=payload, timeout=60)
+        r = requests.post("https://api.openai.com/v1/responses", headers=headers, json=payload, timeout=90)
         if r.status_code >= 400:
-            return None, f"HTTP_{r.status_code}: {r.text[:200]}"
+            return None, f"HTTP_{r.status_code}: {r.text[:400]}"
         data = r.json()
-        # Extract text output
-        # Responses API returns "output" array; we try common paths
-        text = None
-        for out in data.get("output", []):
-            for c in out.get("content", []):
-                if c.get("type") in ("output_text", "text"):
-                    text = c.get("text")
-                    if text:
-                        break
-            if text:
-                break
+        text = extract_output_text_from_responses(data)
         if not text:
-            # fallback: sometimes it is at data["output_text"]
-            text = data.get("output_text")
+            return None, "NO_OUTPUT_TEXT"
         return text, None
     except Exception as e:
         return None, str(e)
@@ -267,7 +256,7 @@ PDD_CLIENT_ID = ""
 PDD_CLIENT_SECRET = ""
 PDD_PID = ""
 
-# ==================== 三平台商品搜索函数（保持原样，不影响 OpenAI 分析） ====================
+# ==================== 三平台商品搜索函数（不影响 OpenAI 分析） ====================
 def taobao_search(keyword="女装", price_min=150, price_max=300):
     try:
         if not (TAOBAO_APP_KEY and TAOBAO_APP_SECRET and TAOBAO_ADZONE_ID):
@@ -399,7 +388,7 @@ if wardrobe:
 else:
     st.info(T["empty"])
 
-# ==================== 衣橱诊断（规则版：占位） ====================
+# ==================== 衣橱诊断（规则占位） ====================
 st.subheader(T["check"])
 if st.button(T["analyze"]):
     total = len(wardrobe)
@@ -427,20 +416,22 @@ if ai_btn:
         st.warning(T["ai_need_item"])
     else:
         with st.spinner(T["ai_running"]):
-            images = [w["img"] for w in wardrobe[:6]]  # 最多取前6件，防止太贵
+            images = [w["img"] for w in wardrobe[:6]]
             metas = [{"name": w["name"], "type": w["type"], "color": w["color"]} for w in wardrobe[:6]]
             text, err = openai_analyze_items(images, metas, user_profile_text)
+
         if err:
             st.error(T["ai_fail"])
             st.code(str(err))
         else:
-            # 尝试把输出解析成 JSON 并展示
             try:
                 data = json.loads(text)
                 st.success("✅ 分析完成")
+
                 st.markdown("### 单品建议")
                 for it in data.get("items", []):
-                    with st.expander(f"{it.get('name','未命名')} · {it.get('keep_decision','')}", expanded=True):
+                    title = f"{it.get('name','未命名')} · {it.get('keep_decision','')}"
+                    with st.expander(title, expanded=True):
                         st.write({
                             "predicted_type": it.get("predicted_type"),
                             "predicted_color": it.get("predicted_color"),
@@ -450,17 +441,18 @@ if ai_btn:
                             "keep_decision": it.get("keep_decision"),
                             "reason": it.get("reason"),
                         })
+
                 st.markdown("### 衣橱整体建议")
                 for s in data.get("wardrobe_advice", []):
                     st.write(f"- {s}")
+
                 if data.get("notes"):
                     st.info(f"备注：{data.get('notes')}")
             except Exception:
-                # 如果模型没严格输出 JSON，就直接原文展示
-                st.warning("模型输出不是标准 JSON，我先原样展示（我也可以把提示词调得更严）。")
+                st.warning("模型输出不是标准 JSON，我先原样展示（需要的话我再把提示词收紧）。")
                 st.text(text)
 
-# ==================== 穿搭生成（保留原占位逻辑） ====================
+# ==================== 穿搭生成（占位逻辑） ====================
 st.subheader(T["outfit"])
 cb1, cb2 = st.columns(2)
 with cb1:
