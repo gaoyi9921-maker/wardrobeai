@@ -1,9 +1,7 @@
 import streamlit as st
 import time
-import hashlib
 import requests
 from PIL import Image
-from urllib.parse import urlencode
 import base64
 import io
 import json
@@ -54,10 +52,10 @@ T = {
     "improve": "⚠️ 建议优化",
     "remove": "🗑 建议清理",
     "ai_title": "🧠 AI 衣物分析（OpenAI）",
-    "ai_tip": "上传衣物照片并保存到衣橱后，点击按钮：自动识别品类/颜色/风格/适用季节/场合，并给出保留与搭配建议。",
+    "ai_tip": "上传衣物照片并保存到衣橱后，点击按钮：自动识别并输出一段可直接阅读的中文建议文案。",
     "ai_need_key": "⚠️ 你还没在 Streamlit Secrets 里配置 OPENAI_API_KEY。",
     "ai_need_item": "⚠️ 请先上传并保存至少 1 件衣物，然后再做 AI 分析。",
-    "ai_btn": "✨ 用 OpenAI 分析我的衣物",
+    "ai_btn": "✨ 用 OpenAI 分析我的衣物（输出文案）",
     "ai_running": "正在分析中…",
     "ai_fail": "❌ OpenAI 分析失败（通常是 Key / 模型 / 参数格式问题）。",
     "outfit": "📅 今日穿搭（占位：后续从你的衣橱里挑）",
@@ -111,18 +109,20 @@ def openai_analyze_items(images, meta_list, user_profile_text):
     if not api_key:
         return None, "NO_KEY"
 
-    # ✅ 重点：content type 用 input_text / input_image
-    # ✅ 重点：input_image 的 image_url 用“字符串”，不是 {"url": ...}，避免你报的 invalid_type
+    # ✅ 输出目标：中文文案（不要 JSON / 不要代码块）
     content = []
     content.append({
         "type": "input_text",
         "text": (
-            "你是专业穿搭顾问。请基于用户衣物照片与填写信息，输出一个 JSON，字段如下：\n"
-            "items: [{name, predicted_type, predicted_color, style_tags(数组), season(数组), occasions(数组), "
-            "keep_decision(keep/improve/remove), reason, match_suggestions(数组)}]\n"
-            "wardrobe_advice: 3-6条整体建议（中文）\n"
-            "notes: 若图片不清晰请说明。\n"
-            "要求：只输出 JSON，不要输出多余文本。"
+            "你是专业穿搭顾问。请基于用户衣物照片与填写信息，输出一段中文分析文案，要求：\n"
+            "1) 先给一句总体结论（1-2句）\n"
+            "2) 然后按“单品分析”逐件写：名称/你判断的品类/颜色/风格/适合季节/适合场合/"
+            "保留建议（保留或优化或清理）/原因/2-3条搭配建议\n"
+            "3) 最后给“衣橱整体建议”3-6条\n"
+            "4) 用清晰的小标题和项目符号，适合直接展示在网页里\n"
+            "5) 语气：理性、清晰、像专业顾问写给用户的建议，不要太学术\n"
+            "6) 不要输出 JSON，不要代码块，不要出现 ``` 这类格式\n"
+            "只输出文案本身。"
         )
     })
     content.append({
@@ -137,6 +137,7 @@ def openai_analyze_items(images, meta_list, user_profile_text):
             "type": "input_text",
             "text": f"衣物{idx}填写信息：{json.dumps(meta, ensure_ascii=False)}"
         })
+        # ✅ 重点：image_url 用字符串（不是对象），避免 400 invalid_type
         content.append({
             "type": "input_image",
             "image_url": data_url
@@ -250,7 +251,7 @@ if st.button(T["analyze"]):
     st.error(f"{T['remove']}: 2")
     st.caption("（这是规则占位输出：下一步可替换为更真实的规则/AI。）")
 
-# ==================== OpenAI 衣物分析 ====================
+# ==================== OpenAI 衣物分析（输出文案） ====================
 st.subheader(T["ai_title"])
 st.caption(T["ai_tip"])
 
@@ -278,35 +279,8 @@ if ai_btn:
             st.error(T["ai_fail"])
             st.code(str(err))
         else:
-            # 尝试解析 JSON 并展示
-            try:
-                data = json.loads(text)
-                st.success("✅ 分析完成")
-
-                st.markdown("### 单品建议")
-                for it in data.get("items", []):
-                    title = f"{it.get('name','未命名')} · {it.get('keep_decision','')}"
-                    with st.expander(title, expanded=True):
-                        st.write({
-                            "识别品类": it.get("predicted_type"),
-                            "识别颜色": it.get("predicted_color"),
-                            "风格标签": it.get("style_tags"),
-                            "适用季节": it.get("season"),
-                            "适合场合": it.get("occasions"),
-                            "保留建议": it.get("keep_decision"),
-                            "原因": it.get("reason"),
-                            "搭配建议": it.get("match_suggestions"),
-                        })
-
-                st.markdown("### 衣橱整体建议")
-                for s in data.get("wardrobe_advice", []):
-                    st.write(f"- {s}")
-
-                if data.get("notes"):
-                    st.info(f"备注：{data.get('notes')}")
-            except Exception:
-                st.warning("模型输出不是标准 JSON，我先原样展示（需要的话我再把提示词收紧）。")
-                st.text(text)
+            st.success("✅ 分析完成")
+            st.markdown(text)
 
 # ==================== 今日穿搭（占位） ====================
 st.subheader(T["outfit"])
